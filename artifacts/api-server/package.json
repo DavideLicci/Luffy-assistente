@@ -1,0 +1,26 @@
+{
+  "name": "@workspace/api-server",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsup src/index.ts --format esm --out-dir dist --sourcemap",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "tsx --test src/**/*.test.ts"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^5.1.0",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "@types/express": "^5.0.1",
+    "@types/node": "^25.3.3",
+    "tsup": "^8.2.4",
+    "tsx": "^4.21.0",
+    "typescript": "~5.9.2"
+  }
+}

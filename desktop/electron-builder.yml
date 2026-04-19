@@ -1,0 +1,18 @@
+appId: com.luffy.assistant
+productName: Luffy Assistant
+directories:
+  output: release
+files:
+  - src/**/*
+extraResources:
+  - from: ../artifacts/api-server/dist
+    to: api
+  - from: ../artifacts/jarvis/dist/public
+    to: web/public
+win:
+  target:
+    - nsis
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true

@@ -194,10 +194,34 @@ Commands also work in English for most intents.
 
 ## Voice Input / Output
 
-- **Push-to-talk**: Click the microphone button, speak, click again to stop
-- **Voice responses**: Luffy speaks Italian via the browser's speech synthesis API
-- **Browser requirement**: Chrome or Edge (Firefox does not support `SpeechRecognition`)
-- No external API required — works fully offline
+- **Push-to-talk**: click the microphone button or use the global hotkey (`Ctrl+Shift+Space` by default)
+- **Offline STT**: Vosk runs in Electron main process; renderer streams raw mic PCM frames via IPC
+- **Voice responses**: Luffy speaks Italian via browser speech synthesis API (voice selectable)
+- **Voice controls**: choose voice, rate, pitch, volume, plus voice preview button
+- **Personality split**: text/personality profile is managed separately from TTS voice profile
+- **No cloud API required**: fully local voice pipeline
+- **Desktop prerequisite for Vosk**: install Visual Studio 2019/2022 with **Desktop development with C++**
+- **Model path**: set `VOSK_MODEL_PATH` or place `vosk-model-small-it-0.22` in `%USERPROFILE%\\.luffy-assistant\\models\\`
+
+---
+
+## UX Features
+
+- **First-run onboarding**:
+  - Guided setup with intro, features, microphone, voice, hotkeys, startup toggle, and initial app whitelist
+  - Can be skipped, is persisted as completed, and can be reopened from Settings
+- **Quick Command Palette**:
+  - Global hotkey (`Ctrl+Shift+P` default)
+  - Lightweight overlay for rapid text command execution with suggestions
+- **Native Windows notifications**:
+  - Reminder notifications
+  - Action confirmations (for example app launch)
+  - Important errors (voice/microphone/scheduler)
+- **Structured memory panel**:
+  - Preferences, contextual notes, frequent apps, and recent notes
+- **Local scheduler**:
+  - One-shot and recurring reminders (`none`, `daily`, `weekdays`)
+  - Optional scheduled actions (`open_app` or assistant command)
 
 ---
 

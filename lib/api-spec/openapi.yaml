@@ -1,0 +1,36 @@
+openapi: 3.1.0
+info:
+  title: Luffy Assistant API
+  version: 1.0.0
+paths:
+  /api/assistant/command:
+    post:
+      summary: Execute assistant command
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [text]
+              properties:
+                text:
+                  type: string
+                source:
+                  type: string
+                  enum: [text, voice]
+      responses:
+        "200":
+          description: Command response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  reply:
+                    type: string
+                  intent:
+                    type: string
+                  outcome:
+                    type: string
+                    enum: [executed, blocked, not_found, error]
