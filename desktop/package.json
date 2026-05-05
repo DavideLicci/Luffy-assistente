@@ -5,22 +5,25 @@
   "description": "Luffy desktop wrapper (Windows)",
   "main": "src/main.js",
   "scripts": {
-    "dev": "concurrently --kill-others --names api,web,app --prefix-colors cyan,magenta,green \"pnpm -C .. run dev:api\" \"pnpm -C .. run dev:web\" \"wait-on tcp:3000 && electron .\"",
-    "start": "electron .",
-    "build:api": "pnpm -C .. --filter @workspace/api-server run build",
-    "build:web": "pnpm -C .. --filter @workspace/jarvis run build",
-    "package:win": "pnpm run build:api && pnpm run build:web && electron-builder --win nsis",
-    "package:mac": "pnpm run build:api && pnpm run build:web && electron-builder --mac dmg",
-    "package:linux": "pnpm run build:api && pnpm run build:web && electron-builder --linux AppImage"
-  },
-  "dependencies": {
-    "electron-is-dev": "^3.0.1"
+    "dev": "concurrently --kill-others-on-fail --names api,web,app --prefix-colors cyan,magenta,green \"cross-env PORT=8080 npm --prefix .. run dev:api\" \"cross-env WEB_PORT=3000 npm --prefix ../artifacts/jarvis run dev -- --host 127.0.0.1 --port 3000\" \"cross-env WEB_PORT=3000 wait-on tcp:8080 && electron .\"",
+    "start": "npm run dev",
+    "start:electron-only": "electron .",
+    "build:api": "npm --prefix ../artifacts/api-server run build",
+    "build:web": "npm --prefix ../artifacts/jarvis run build",
+    "package:win": "npm run build:api && npm run build:web && electron-builder --win nsis",
+    "package:mac": "npm run build:api && npm run build:web && electron-builder --mac dmg",
+    "package:linux": "npm run build:api && npm run build:web && electron-builder --linux AppImage"
   },
   "optionalDependencies": {
-    "vosk": "^0.3.38"
+    "ffi-napi": "^4.0.3",
+    "mic": "^2.1.2",
+    "ref-napi": "^3.0.3",
+    "vosk": "^0.3.39",
+    "wav": "^1.0.2"
   },
   "devDependencies": {
     "concurrently": "^9.1.2",
+    "cross-env": "^7.0.3",
     "electron": "^33.2.1",
     "electron-builder": "^26.0.12",
     "wait-on": "^8.0.3"
@@ -42,5 +45,8 @@
         "to": "web/public"
       }
     ]
+  },
+  "dependencies": {
+    "workspace": "file:.."
   }
 }

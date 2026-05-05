@@ -1,0 +1,34 @@
+
+> luffy-desktop@1.0.0 dev
+> concurrently --kill-others-on-fail --names api,web,app --prefix-colors cyan,magenta,green "npm --prefix .. run dev:api" "npm --prefix .. run dev:web" "wait-on tcp:3000 && electron ."
+
+[web] 
+[web] > workspace@0.0.0 dev:web
+[web] > npm --prefix artifacts/jarvis run dev
+[web] 
+[api] 
+[api] > workspace@0.0.0 dev:api
+[api] > npm --prefix artifacts/api-server run dev
+[api] 
+[app] 
+[app] wait-on tcp:3000 && electron . exited with code 0
+[api] 
+[api] > @workspace/api-server@0.0.0 dev
+[api] > tsx watch src/index.ts
+[api] 
+[web] 
+[web] > @workspace/jarvis@0.0.0 dev
+[web] > vite
+[web] 
+[web] Port 3000 is in use, trying another one...
+[web] Port 3001 is in use, trying another one...
+[web] Port 3002 is in use, trying another one...
+[web] 
+[web]   [32m[1mVITE[22m v7.3.2[39m  [2mready in [0m[1m612[22m[2m[0m ms[22m
+[web] 
+[web]   [32m➜[39m  [1mLocal[22m:   [36mhttp://localhost:[1m3003[22m/[39m
+[web]   [32m➜[39m  [1mNetwork[22m: [36mhttp://192.168.1.12:[1m3003[22m/[39m
+[api] [luffy-api] listening on http://0.0.0.0:8080
+[web] [2m21:26:15[22m [36m[1m[vite][22m[39m [32mvite.config.ts changed, restarting server...[39m
+[web] [2m21:26:15[22m [36m[1m[vite][22m[39m [32mvite.config.ts changed, restarting server...[39m
+[web] [2m21:26:16[22m [36m[1m[vite][22m[39m server restarted.

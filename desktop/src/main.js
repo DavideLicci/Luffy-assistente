@@ -11,7 +11,6 @@ const {
   globalShortcut,
   Notification
 } = require("electron");
-const isDev = require("electron-is-dev");
 
 const { DesktopSettingsStore, DEFAULT_SETTINGS } = require("./settings-store");
 const { LauncherService } = require("./launcher-service");
@@ -21,6 +20,8 @@ const { SchedulerService } = require("./scheduler-service");
 const APP_NAME = "Luffy Assistant";
 const API_PORT = Number(process.env.PORT || 8080);
 const WEB_PORT = Number(process.env.WEB_PORT || 3000);
+const isDev = !app.isPackaged;
+let resolvedDevBaseUrl = null;
 
 const settingsStore = new DesktopSettingsStore();
 const launcherService = new LauncherService(settingsStore);
@@ -42,19 +43,150 @@ function sendToRenderers(channel, payload) {
   }
 }
 
-function getBaseUrl() {
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isLikelyLuffyHtml(htmlText) {
+  if (!htmlText) {
+    return false;
+  }
+  return (
+    htmlText.includes("<div id=\"root\"></div>") &&
+    (htmlText.includes("Luffy Assistant") ||
+      htmlText.includes("/src/main.tsx") ||
+      htmlText.includes("/assets/index-"))
+  );
+}
+
+async function probeDevUrl(url) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 1200);
+
+  try {
+    const response = await fetch(url, {
+      method: "GET",
+      signal: controller.signal
+    });
+    if (!response.ok) {
+      return false;
+    }
+    const contentType = String(response.headers.get("content-type") || "");
+    if (!contentType.includes("text/html")) {
+      return false;
+    }
+    const html = await response.text();
+    return isLikelyLuffyHtml(html);
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function resolveDevBaseUrl(forceRefresh = false) {
+  if (!isDev) {
+    return `http://127.0.0.1:${API_PORT}`;
+  }
+
+  if (resolvedDevBaseUrl && !forceRefresh) {
+    return resolvedDevBaseUrl;
+  }
+
+  const preferredPort = WEB_PORT;
+  const candidates = new Set([preferredPort, 5173, 4173]);
+  for (let port = 3000; port <= 3010; port += 1) {
+    candidates.add(port);
+  }
+
+  for (const port of candidates) {
+    const candidateUrl = `http://127.0.0.1:${port}`;
+    // Probe to avoid loading unrelated services that can create a blank white window.
+    // If Vite shifts port in development, we still find the correct one automatically.
+    const ok = await probeDevUrl(candidateUrl);
+    if (ok) {
+      resolvedDevBaseUrl = candidateUrl;
+      return candidateUrl;
+    }
+  }
+
+  resolvedDevBaseUrl = `http://127.0.0.1:${preferredPort}`;
+  return resolvedDevBaseUrl;
+}
+
+async function getMainWindowUrl(forceRefresh = false) {
   if (isDev) {
-    return `http://127.0.0.1:${WEB_PORT}`;
+    return resolveDevBaseUrl(forceRefresh);
   }
   return `http://127.0.0.1:${API_PORT}`;
 }
 
-function getMainWindowUrl() {
-  return getBaseUrl();
+async function getOverlayWindowUrl(forceRefresh = false) {
+  const base = isDev
+    ? await resolveDevBaseUrl(forceRefresh)
+    : `http://127.0.0.1:${API_PORT}`;
+  return `${base}?overlay=1`;
 }
 
-function getOverlayWindowUrl() {
-  return `${getBaseUrl()}?overlay=1`;
+function loadingDataUrl(kind, details = "") {
+  const safeDetails = String(details || "").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const body = `
+    <html lang="it">
+      <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>${APP_NAME}</title>
+        <style>
+          body { margin: 0; font-family: Segoe UI, Tahoma, sans-serif; background: #f4f8ff; color: #1b2b46; }
+          .wrap { min-height: 100vh; display: grid; place-items: center; padding: 24px; }
+          .card { max-width: 520px; background: #fff; border: 1px solid #d5e2f4; border-radius: 14px; padding: 18px; box-shadow: 0 10px 24px rgba(17, 39, 74, 0.12); }
+          .title { font-size: 18px; font-weight: 700; margin-bottom: 8px; }
+          .hint { color: #4f6788; line-height: 1.4; }
+          .small { margin-top: 8px; color: #6c84a5; font-size: 12px; }
+        </style>
+      </head>
+      <body>
+        <div class="wrap">
+          <div class="card">
+            <div class="title">${APP_NAME}</div>
+            <div class="hint">Avvio in corso (${kind}). Attendo i servizi locali...</div>
+            ${safeDetails ? `<div class="small">${safeDetails}</div>` : ""}
+          </div>
+        </div>
+      </body>
+    </html>
+  `;
+  return `data:text/html;charset=UTF-8,${encodeURIComponent(body)}`;
+}
+
+async function loadWindowWithRetry(win, kind, urlResolver) {
+  let attempt = 0;
+  while (win && !win.isDestroyed()) {
+    try {
+      const targetUrl = await urlResolver(attempt > 0);
+      await win.loadURL(targetUrl);
+      return;
+    } catch (error) {
+      attempt += 1;
+      if (attempt === 1) {
+        try {
+          await win.loadURL(loadingDataUrl(kind));
+        } catch {
+          // no-op
+        }
+      }
+      if (attempt % 6 === 0) {
+        console.warn(
+          `[desktop] waiting for ${kind} UI (attempt ${attempt})`,
+          error instanceof Error ? error.message : error
+        );
+      }
+      if (isDev) {
+        resolvedDevBaseUrl = null;
+      }
+      await sleep(800);
+    }
+  }
 }
 
 function getNotificationIcon() {
@@ -222,17 +354,7 @@ function createMainWindow() {
     hideToTray();
   });
 
-  const targetUrl = getMainWindowUrl();
-  const tryLoad = (attempt = 0) => {
-    mainWindow.loadURL(targetUrl).catch(() => {
-      if (attempt >= 25) {
-        return;
-      }
-      setTimeout(() => tryLoad(attempt + 1), 300);
-    });
-  };
-
-  tryLoad();
+  void loadWindowWithRetry(mainWindow, "main", getMainWindowUrl);
 }
 
 function createOverlayWindow() {
@@ -260,17 +382,7 @@ function createOverlayWindow() {
     }
   });
 
-  const targetUrl = getOverlayWindowUrl();
-  const tryLoad = (attempt = 0) => {
-    overlayWindow.loadURL(targetUrl).catch(() => {
-      if (attempt >= 25) {
-        return;
-      }
-      setTimeout(() => tryLoad(attempt + 1), 300);
-    });
-  };
-
-  tryLoad();
+  void loadWindowWithRetry(overlayWindow, "overlay", getOverlayWindowUrl);
 }
 
 function buildTray() {
@@ -355,11 +467,13 @@ function handleReminderTriggered(reminder) {
 
 function bindIpc() {
   ipcMain.handle("voice:start", async () => {
-    await voiceService.start();
+    const result = await voiceService.start();
+    return result || { ok: false, reason: "UNKNOWN" };
   });
 
   ipcMain.handle("voice:stop", async () => {
     voiceService.stop();
+    return { ok: true };
   });
 
   ipcMain.on("voice:chunk", (_event, payload) => {
@@ -438,10 +552,14 @@ function bindIpc() {
 
   voiceService.on("error", (payload) => {
     sendToRenderers("voice:error", payload);
-    showNativeNotification({
-      title: APP_NAME,
-      body: payload && payload.message ? String(payload.message) : "Errore voce."
-    });
+    const code = payload && payload.code ? String(payload.code) : "";
+    const isRecoverable = code === "VOSK_LOAD_ERROR" || code === "MODEL_NOT_FOUND";
+    if (!isRecoverable) {
+      showNativeNotification({
+        title: APP_NAME,
+        body: payload && payload.message ? String(payload.message) : "Errore voce."
+      });
+    }
   });
 }
 

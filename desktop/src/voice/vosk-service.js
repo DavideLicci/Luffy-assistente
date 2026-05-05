@@ -15,29 +15,17 @@ class VoskVoiceService extends EventEmitter {
 
   async start() {
     if (this.started) {
-      return;
+      return { ok: true, backend: "vosk" };
     }
 
     try {
       this.vosk = require("vosk");
     } catch (error) {
-      this.emit("error", {
-        code: "VOSK_LOAD_ERROR",
-        message:
-          (error instanceof Error ? error.message : "Impossibile caricare Vosk.") +
-          " Installa Visual Studio con Desktop development with C++ e reinstalla `desktop`."
-      });
-      return;
+      return { ok: false, reason: "VOSK_LOAD_ERROR" };
     }
 
     if (!fs.existsSync(this.modelPath)) {
-      this.emit("error", {
-        code: "MODEL_NOT_FOUND",
-        message:
-          `Modello Vosk non trovato in ${this.modelPath}. ` +
-          "Scarica `vosk-model-small-it-0.22` e imposta VOSK_MODEL_PATH."
-      });
-      return;
+      return { ok: false, reason: "MODEL_NOT_FOUND" };
     }
 
     try {
@@ -50,12 +38,10 @@ class VoskVoiceService extends EventEmitter {
         sampleRate: 16000
       });
       this.started = true;
+      return { ok: true, backend: "vosk" };
     } catch (error) {
-      this.emit("error", {
-        code: "VOICE_START_ERROR",
-        message: error instanceof Error ? error.message : "Errore avvio riconoscimento."
-      });
       this.stop();
+      return { ok: false, reason: "VOICE_START_ERROR" };
     }
   }
 

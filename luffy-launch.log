@@ -1,0 +1,31 @@
+
+> workspace@0.0.0 start
+> npm --prefix desktop run start
+
+
+> luffy-desktop@1.0.0 start
+> npm run dev
+
+
+> luffy-desktop@1.0.0 dev
+> concurrently --kill-others-on-fail --names api,web,app --prefix-colors cyan,magenta,green "cross-env PORT=8080 npm --prefix .. run dev:api" "cross-env WEB_PORT=3000 npm --prefix ../artifacts/jarvis run dev -- --host 127.0.0.1 --port 3000" "cross-env WEB_PORT=3000 wait-on tcp:8080 && electron ."
+
+[web] 
+[web] > @workspace/jarvis@0.0.0 dev
+[web] > vite --host 127.0.0.1 --port 3000
+[web] 
+[api] 
+[api] > workspace@0.0.0 dev:api
+[api] > npm --prefix artifacts/api-server run dev
+[api] 
+[api] 
+[api] > @workspace/api-server@0.0.0 dev
+[api] > tsx watch src/index.ts
+[api] 
+[web] [2m21:28:42[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m Re-optimizing dependencies because vite config has changed
+[web] 
+[web]   [32m[1mVITE[22m v7.3.2[39m  [2mready in [0m[1m638[22m[2m[0m ms[22m
+[web] 
+[web]   [32m➜[39m  [1mLocal[22m:   [36mhttp://127.0.0.1:[1m3000[22m/[39m
+[api] [luffy-api] listening on http://0.0.0.0:8080
+[app] 

@@ -4,8 +4,8 @@ declare global {
   interface Window {
     desktop?: {
       voice: {
-        start: () => Promise<void>;
-        stop: () => Promise<void>;
+        start: () => Promise<{ ok: boolean; backend?: string; reason?: string }>;
+        stop: () => Promise<{ ok: boolean }>;
         pushChunk: (chunk: Uint8Array) => void;
         onResult: (
           handler: (payload: { text: string; confidence: number }) => void

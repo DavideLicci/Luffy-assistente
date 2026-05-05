@@ -104,7 +104,7 @@ const defaultSettings: AssistantSettings = {
   microphoneDeviceId: null,
   voiceProfile: {
     voiceURI: null,
-    rate: 1,
+    rate: 0.98,
     pitch: 1,
     volume: 1
   },
@@ -129,36 +129,96 @@ const quickSuggestions = [
   "timer 25 minuti"
 ];
 
-function speakWithProfile(
+function pickBestItalianVoice(
+  voices: SpeechSynthesisVoice[],
+  selectedVoiceURI: string | null
+): SpeechSynthesisVoice | undefined {
+  if (selectedVoiceURI) {
+    const exact = voices.find((voice) => voice.voiceURI === selectedVoiceURI);
+    if (exact) {
+      return exact;
+    }
+  }
+
+  const scored = voices
+    .map((voice) => {
+      let score = 0;
+      const name = voice.name.toLowerCase();
+      if (voice.localService) {
+        score += 2;
+      }
+      if (/neural|natural/.test(name)) {
+        score += 6;
+      }
+      if (/microsoft|google|sara|elsa/.test(name)) {
+        score += 3;
+      }
+      if (voice.lang.toLowerCase().startsWith("it")) {
+        score += 4;
+      }
+      return { voice, score };
+    })
+    .sort((a, b) => b.score - a.score);
+
+  return scored[0]?.voice;
+}
+
+function splitForSpeech(text: string): string[] {
+  const normalized = text.replace(/\s+/g, " ").replace(/\n+/g, ". ").trim();
+  if (!normalized) {
+    return [];
+  }
+  const sentences = normalized.match(/[^.!?]+[.!?]?/g) ?? [normalized];
+  const chunks: string[] = [];
+  let current = "";
+  for (const rawSentence of sentences) {
+    const sentence = rawSentence.trim();
+    if (!sentence) {
+      continue;
+    }
+    if ((current + " " + sentence).trim().length > 180) {
+      if (current.trim()) {
+        chunks.push(current.trim());
+      }
+      current = sentence;
+    } else {
+      current = `${current} ${sentence}`.trim();
+    }
+  }
+  if (current.trim()) {
+    chunks.push(current.trim());
+  }
+  return chunks.length > 0 ? chunks : [normalized];
+}
+
+async function speakWithProfile(
   text: string,
   profile: VoiceProfile,
   voices: SpeechSynthesisVoice[]
-): Promise<void> {
-  return new Promise((resolve) => {
-    const synth = window.speechSynthesis;
-    if (!synth) {
-      resolve();
-      return;
-    }
+) {
+  const synth = window.speechSynthesis;
+  if (!synth) {
+    return;
+  }
 
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = "it-IT";
-    utterance.rate = profile.rate;
-    utterance.pitch = profile.pitch;
-    utterance.volume = profile.volume;
-
-    const selectedVoice =
-      (profile.voiceURI && voices.find((voice) => voice.voiceURI === profile.voiceURI)) ||
-      voices[0];
-    if (selectedVoice) {
-      utterance.voice = selectedVoice;
-      utterance.lang = selectedVoice.lang;
-    }
-
-    utterance.onend = () => resolve();
-    utterance.onerror = () => resolve();
-    synth.speak(utterance);
-  });
+  const selectedVoice = pickBestItalianVoice(voices, profile.voiceURI);
+  const chunks = splitForSpeech(text);
+  for (const chunk of chunks) {
+    await new Promise<void>((resolve) => {
+      const utterance = new SpeechSynthesisUtterance(chunk);
+      utterance.lang = "it-IT";
+      utterance.rate = profile.rate;
+      utterance.pitch = profile.pitch;
+      utterance.volume = profile.volume;
+      if (selectedVoice) {
+        utterance.voice = selectedVoice;
+        utterance.lang = selectedVoice.lang;
+      }
+      utterance.onend = () => resolve();
+      utterance.onerror = () => resolve();
+      synth.speak(utterance);
+    });
+  }
 }
 
 function downsampleTo16kHz(input: Float32Array, inputSampleRate: number): Int16Array {
@@ -230,6 +290,13 @@ export function App() {
   const [microphones, setMicrophones] = useState<MediaDeviceInfo[]>([]);
   const [onboardingOpen, setOnboardingOpen] = useState(false);
   const [onboardingStep, setOnboardingStep] = useState<OnboardingStep>(0);
+  const [voiceBackend, setVoiceBackend] = useState<"vosk" | "browser" | "none">("none");
+  const [voiceOfflineUnavailableReason, setVoiceOfflineUnavailableReason] = useState<
+    string | null
+  >(null);
+  const [activeMenu, setActiveMenu] = useState<
+    "assistant" | "reminders" | "voice" | "memory" | "settings"
+  >("assistant");
 
   const [appForm, setAppForm] = useState({
     displayName: "",
@@ -262,10 +329,18 @@ export function App() {
   const audioContextRef = useRef<AudioContext | null>(null);
   const sourceNodeRef = useRef<MediaStreamAudioSourceNode | null>(null);
   const processorRef = useRef<ScriptProcessorNode | null>(null);
+  const browserRecognitionRef = useRef<any>(null);
 
   const statusClass = useMemo(() => {
     return `status status-${status.toLowerCase()}`;
   }, [status]);
+
+  const scrollToSection = useCallback((id: string) => {
+    const node = document.getElementById(id);
+    if (node) {
+      node.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  }, []);
 
   const speakAssistant = useCallback(
     async (text: string) => {
@@ -412,6 +487,102 @@ export function App() {
     }
   }, []);
 
+  const stopBrowserRecognition = useCallback(() => {
+    if (browserRecognitionRef.current) {
+      try {
+        browserRecognitionRef.current.stop();
+      } catch {
+        // no-op
+      }
+      browserRecognitionRef.current = null;
+    }
+  }, []);
+
+  const startBrowserRecognition = useCallback(async () => {
+    const Ctor =
+      (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!Ctor) {
+      throw new Error(
+        "Riconoscimento vocale browser non disponibile. Usa Chrome/Edge oppure installa Vosk."
+      );
+    }
+
+    const recognition = new Ctor();
+    recognition.lang = "it-IT";
+    recognition.continuous = false;
+    recognition.interimResults = false;
+    recognition.maxAlternatives = 1;
+
+    browserRecognitionRef.current = recognition;
+    recognition.onstart = () => {
+      setVoiceBackend("browser");
+      setListening(true);
+      setStatus("Listening");
+    };
+    recognition.onerror = (event: any) => {
+      const message = event?.error ? `Errore voice browser: ${event.error}` : "Errore voice browser.";
+      setReply(message);
+      setVoiceBackend("none");
+      setListening(false);
+      setStatus("Idle");
+      browserRecognitionRef.current = null;
+    };
+    recognition.onend = () => {
+      setVoiceBackend("none");
+      setListening(false);
+      setStatus("Idle");
+      browserRecognitionRef.current = null;
+    };
+    recognition.onresult = (event: any) => {
+      const transcript = event?.results?.[0]?.[0]?.transcript;
+      if (typeof transcript === "string" && transcript.trim()) {
+        setCommand(transcript.trim());
+        void submitCommand(transcript.trim(), "voice");
+      }
+    };
+    recognition.start();
+  }, [submitCommand]);
+
+  const runMicrophoneTest = useCallback(async () => {
+    const audioConstraints: MediaTrackConstraints | boolean = settings.microphoneDeviceId
+      ? { deviceId: { exact: settings.microphoneDeviceId } }
+      : true;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints });
+      const context = new AudioContext();
+      const source = context.createMediaStreamSource(stream);
+      const analyser = context.createAnalyser();
+      analyser.fftSize = 512;
+      source.connect(analyser);
+
+      const data = new Uint8Array(analyser.frequencyBinCount);
+      let peak = 0;
+      const started = Date.now();
+      while (Date.now() - started < 1200) {
+        analyser.getByteFrequencyData(data);
+        for (const value of data) {
+          if (value > peak) {
+            peak = value;
+          }
+        }
+        await new Promise((resolve) => setTimeout(resolve, 60));
+      }
+
+      source.disconnect();
+      analyser.disconnect();
+      stream.getTracks().forEach((track) => track.stop());
+      await context.close();
+
+      if (peak > 12) {
+        setReply(`Test microfono OK (livello ${peak}).`);
+      } else {
+        setReply("Microfono rilevato ma segnale molto basso. Prova ad avvicinarti.");
+      }
+    } catch (error) {
+      setReply(error instanceof Error ? error.message : "Test microfono fallito.");
+    }
+  }, [settings.microphoneDeviceId]);
+
   const startAudioCapture = useCallback(async () => {
     const desktop = window.desktop;
     if (!desktop) {
@@ -443,29 +614,69 @@ export function App() {
   }, [settings.microphoneDeviceId]);
 
   const stopListeningSession = useCallback(async () => {
+    stopBrowserRecognition();
     await stopAudioCapture();
     if (window.desktop) {
       await window.desktop.voice.stop();
     }
+    setVoiceBackend("none");
     setListening(false);
     setStatus("Idle");
-  }, [stopAudioCapture]);
+  }, [stopAudioCapture, stopBrowserRecognition]);
 
   const startListeningSession = useCallback(async () => {
     const desktop = window.desktop;
     if (!desktop) {
-      setReply("La funzione voce è disponibile solo nella desktop app.");
-      return;
+      try {
+        await startBrowserRecognition();
+        setReply("Modalità voce browser attiva.");
+        return;
+      } catch (error) {
+        setReply(error instanceof Error ? error.message : "Voce non disponibile.");
+        return;
+      }
     }
     try {
-      await desktop.voice.start();
-      await startAudioCapture();
-      setListening(true);
-      setStatus("Listening");
+      if (voiceOfflineUnavailableReason) {
+        await startBrowserRecognition();
+        setReply("Modalità voce browser attiva.");
+        return;
+      }
+
+      const startResult = await desktop.voice.start();
+      if (startResult?.ok) {
+        setVoiceOfflineUnavailableReason(null);
+        await startAudioCapture();
+        setVoiceBackend("vosk");
+        setListening(true);
+        setStatus("Listening");
+        return;
+      }
+
+      await desktop.voice.stop();
+      await stopAudioCapture();
+      const reason = startResult?.reason ?? "UNKNOWN";
+      setVoiceOfflineUnavailableReason(reason);
+      try {
+        await startBrowserRecognition();
+        setReply("Modalità voce offline non disponibile ora. Attivato fallback browser.");
+      } catch (fallbackError) {
+        const fallbackMessage =
+          fallbackError instanceof Error
+            ? fallbackError.message
+            : "Fallback browser non disponibile.";
+        setReply(`Voce non disponibile (${reason}). ${fallbackMessage}`);
+        await desktop.notify.show({
+          title: "Luffy",
+          body: "Errore importante: modulo voce non disponibile."
+        });
+      }
     } catch (error) {
       await stopAudioCapture();
+      stopBrowserRecognition();
       await desktop.voice.stop();
       setReply(error instanceof Error ? error.message : "Errore avvio microfono.");
+      setVoiceBackend("none");
       setListening(false);
       setStatus("Idle");
       await desktop.notify.show({
@@ -473,7 +684,13 @@ export function App() {
         body: "Errore importante: microfono non disponibile."
       });
     }
-  }, [startAudioCapture, stopAudioCapture]);
+  }, [
+    startAudioCapture,
+    startBrowserRecognition,
+    stopAudioCapture,
+    stopBrowserRecognition,
+    voiceOfflineUnavailableReason
+  ]);
 
   const saveGeneralSettings = useCallback(async () => {
     setSaving(true);
@@ -759,8 +976,12 @@ export function App() {
     });
 
     const offError = desktop.voice.onError((payload) => {
+      const recoverable =
+        payload.code === "VOSK_LOAD_ERROR" || payload.code === "MODEL_NOT_FOUND";
       setReply(`Errore voce (${payload.code}): ${payload.message}`);
-      void stopListeningSession();
+      if (!recoverable || voiceBackend !== "browser") {
+        void stopListeningSession();
+      }
     });
 
     const offHotkey = desktop.hotkey.onPushToTalk(() => {
@@ -783,14 +1004,16 @@ export function App() {
     refreshReminders,
     startListeningSession,
     stopListeningSession,
-    submitCommand
+    submitCommand,
+    voiceBackend
   ]);
 
   useEffect(() => {
     return () => {
       void stopAudioCapture();
+      stopBrowserRecognition();
     };
-  }, [stopAudioCapture]);
+  }, [stopAudioCapture, stopBrowserRecognition]);
 
   useEffect(() => {
     if (!isOverlayMode) {
@@ -822,6 +1045,19 @@ export function App() {
     }
     await startListeningSession();
   };
+
+  const offlineVoiceHint = useMemo(() => {
+    if (!voiceOfflineUnavailableReason) {
+      return "";
+    }
+    if (voiceOfflineUnavailableReason === "VOSK_LOAD_ERROR") {
+      return "Voce offline non pronta: installa Visual Studio Build Tools con Desktop development with C++.";
+    }
+    if (voiceOfflineUnavailableReason === "MODEL_NOT_FOUND") {
+      return "Voce offline non pronta: modello italiano Vosk non trovato.";
+    }
+    return `Voce offline non disponibile (${voiceOfflineUnavailableReason}).`;
+  }, [voiceOfflineUnavailableReason]);
 
   if (isOverlayMode) {
     return (
@@ -855,7 +1091,75 @@ export function App() {
 
   return (
     <div className="layout">
-      <section className="panel">
+      <aside className="side-menu">
+        <div className="brand-card">
+          <strong>Luffy</strong>
+          <span>Desktop Assistant</span>
+          <span className={`backend-chip backend-${voiceBackend}`}>
+            Voice:{" "}
+            {voiceBackend === "vosk"
+              ? "Vosk offline"
+              : voiceBackend === "browser"
+                ? "Browser fallback"
+                : "idle"}
+          </span>
+        </div>
+        <nav className="menu-nav">
+          <button
+            type="button"
+            className={activeMenu === "assistant" ? "menu-item active" : "menu-item"}
+            onClick={() => {
+              setActiveMenu("assistant");
+              scrollToSection("section-assistant");
+            }}
+          >
+            Assistant
+          </button>
+          <button
+            type="button"
+            className={activeMenu === "reminders" ? "menu-item active" : "menu-item"}
+            onClick={() => {
+              setActiveMenu("reminders");
+              scrollToSection("section-reminders");
+            }}
+          >
+            Reminder
+          </button>
+          <button
+            type="button"
+            className={activeMenu === "voice" ? "menu-item active" : "menu-item"}
+            onClick={() => {
+              setActiveMenu("voice");
+              scrollToSection("section-voice");
+            }}
+          >
+            Voce
+          </button>
+          <button
+            type="button"
+            className={activeMenu === "memory" ? "menu-item active" : "menu-item"}
+            onClick={() => {
+              setActiveMenu("memory");
+              scrollToSection("section-memory");
+            }}
+          >
+            Memoria
+          </button>
+          <button
+            type="button"
+            className={activeMenu === "settings" ? "menu-item active" : "menu-item"}
+            onClick={() => {
+              setActiveMenu("settings");
+              scrollToSection("section-settings");
+            }}
+          >
+            Impostazioni
+          </button>
+        </nav>
+      </aside>
+
+      <div className="content-column">
+      <section id="section-assistant" className="panel panel-reveal">
         <h2>Luffy Assistant</h2>
         <div className={statusClass}>
           <span className="status-indicator" />
@@ -879,6 +1183,7 @@ export function App() {
         <p className="hint">
           Hotkey voce: {settings.pushToTalkHotkey} | Palette: {settings.commandPaletteHotkey}
         </p>
+        {offlineVoiceHint ? <p className="hint warning-hint">{offlineVoiceHint}</p> : null}
 
         <div className="reply-box">{reply}</div>
 
@@ -891,6 +1196,7 @@ export function App() {
           ))}
         </ul>
 
+        <div id="section-reminders" className="subpanel section-anchor">
         <h3>Reminder Scheduler</h3>
         <form onSubmit={upsertReminder}>
           <div>
@@ -981,11 +1287,12 @@ export function App() {
             </div>
           ))}
         </div>
+        </div>
       </section>
 
-      <section className="panel">
+      <section className="panel panel-reveal">
         <h2>Impostazioni</h2>
-        <div className="subpanel">
+        <div id="section-settings" className="subpanel section-anchor">
           <h3>Desktop</h3>
           <label>
             <input
@@ -1039,7 +1346,7 @@ export function App() {
           </div>
         </div>
 
-        <div className="subpanel">
+        <div id="section-voice" className="subpanel section-anchor">
           <h3>Voce (TTS)</h3>
           <p className="hint">
             TTS e personalità sono separati: qui regoli solo la resa vocale.
@@ -1185,7 +1492,7 @@ export function App() {
           />
         </div>
 
-        <div className="subpanel">
+        <div id="section-memory" className="subpanel section-anchor">
           <h3>Microfono</h3>
           <div className="row">
             <select
@@ -1208,7 +1515,7 @@ export function App() {
               Aggiorna lista
             </button>
           </div>
-          <button type="button" className="secondary" onClick={() => void startListeningSession()}>
+          <button type="button" className="secondary" onClick={() => void runMicrophoneTest()}>
             Test audio
           </button>
         </div>
@@ -1379,6 +1686,7 @@ export function App() {
           </button>
         </div>
       </section>
+      </div>
 
       {onboardingOpen && (
         <div className="modal-backdrop">
@@ -1440,7 +1748,7 @@ export function App() {
                     Aggiorna mic
                   </button>
                 </div>
-                <button type="button" className="secondary" onClick={() => void startListeningSession()}>
+                <button type="button" className="secondary" onClick={() => void runMicrophoneTest()}>
                   Test audio microfono
                 </button>
                 <select
